@@ -126,7 +126,6 @@ Electroluminescence::PostStepDoIt(const G4Track& track, const G4Step& step)
   G4Material* mat = pPostStepPoint->GetTouchable()->GetVolume()->GetLogicalVolume()->GetMaterial();
   G4MaterialPropertiesTable* mpt = mat->GetMaterialPropertiesTable();
   const G4MaterialPropertyVector* spectrum = mpt->GetProperty("ELSPECTRUM");
-
   if (!spectrum) return G4VDiscreteProcess::PostStepDoIt(track, step);
 
   G4PhysicsOrderedFreeVector* spectrum_integral =
@@ -136,22 +135,23 @@ Electroluminescence::PostStepDoIt(const G4Track& track, const G4Step& step)
   
   // Add time components to EL
   G4int N_timeconstants = 1;
- 
-   if(mpt->GetProperty("ELTIMECONSTANT3"))
+
+   if(mpt->GetConstProperty("ELTIMECONSTANT3"))
      N_timeconstants = 3;
-   else if(mpt->GetProperty("ELTIMECONSTANT2"))
+   else if(mpt->GetConstProperty("ELTIMECONSTANT2"))
      N_timeconstants = 2;
-   else if(!(mpt->GetProperty("ELTIMECONSTANT1")))
+   else if(!(mpt->GetConstProperty("ELTIMECONSTANT1")))
    {
      // no components were specified
      return G4VDiscreteProcess::PostStepDoIt(track, step);
    }
+
   G4double yield1     = 0.;
   G4double yield2     = 0.;
   G4double yield3     = 0.;
   G4double sum_yields = 0.;  
   
-  yield1 = mpt->ConstPropertyExists("ELYIELD1")
+  yield1 = mpt->GetConstProperty("ELYIELD1")
                 ? mpt->GetConstProperty("ELYIELD1")
                 : 1.;
   yield2 = mpt->ConstPropertyExists("ELYIELD2")
