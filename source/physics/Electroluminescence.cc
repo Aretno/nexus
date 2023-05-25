@@ -17,6 +17,8 @@
 #include <Randomize.hh>
 #include <G4Poisson.hh>
 #include <G4GenericMessenger.hh>
+#include <G4Scintillation.hh>
+#include "globals.hh"
 
 #include <CLHEP/Units/PhysicalConstants.h>
 
@@ -88,38 +90,40 @@ Electroluminescence::PostStepDoIt(const G4Track& track, const G4Step& step)
   G4double mean = yield * step_length;
 
   G4int num_photons;
+  G4int total_num_photons;
 
   if (yield < 10.) { // Poissonian regime
-    num_photons = G4int(G4Poisson(mean));
+    total_num_photons = G4int(G4Poisson(mean));
   }
   else {             // Gaussian regime
     G4double sigma = sqrt(mean);
-    num_photons = G4int(G4RandGauss::shoot(mean, sigma) + 0.5);
+    total_num_photons = G4int(G4RandGauss::shoot(mean, sigma) + 0.5);
   }
 
   if (table_generation_)
-    num_photons = photons_per_point_;
+    total_num_photons = photons_per_point_;
 
-  ParticleChange_->SetNumberOfSecondaries(num_photons);
+  ParticleChange_->SetNumberOfSecondaries(total_num_photons);
 
   // Track secondaries first to avoid a memory bloat
-  if ((num_photons > 0) && (track.GetTrackStatus() == fAlive))
+  if ((total_num_photons > 0) && (track.GetTrackStatus() == fAlive))
     ParticleChange_->ProposeTrackStatus(fSuspend);
 
 
   //////////////////////////////////////////////////////////////////
-
-  G4ThreeVector position = step.GetPreStepPoint()->GetPosition();
-  G4double time = step.GetPreStepPoint()->GetGlobalTime();
+  G4StepPoint* pPostStepPoint = step.GetPostStepPoint();
+  G4StepPoint* pPreStepPoint  = step.GetPreStepPoint();
+  G4ThreeVector position = pPreStepPoint->GetPosition();
+  G4double time = pPreStepPoint->GetGlobalTime();
   G4LorentzVector initial_position(position, time);
 
-  G4ThreeVector position_end = step.GetPostStepPoint()->GetPosition();
-  G4double time_end = step.GetPostStepPoint()->GetGlobalTime();
+  G4ThreeVector position_end = pPostStepPoint->GetPosition();
+  G4double time_end = pPostStepPoint->GetGlobalTime();
   G4LorentzVector final_position(position_end, time_end);
 
   // Energy is sampled from integral (like it is
   // done in G4Scintillation)
-  G4Material* mat = step.GetPostStepPoint()->GetTouchable()->GetVolume()->GetLogicalVolume()->GetMaterial();
+  G4Material* mat = pPostStepPoint->GetTouchable()->GetVolume()->GetLogicalVolume()->GetMaterial();
   G4MaterialPropertiesTable* mpt = mat->GetMaterialPropertiesTable();
   const G4MaterialPropertyVector* spectrum = mpt->GetProperty("ELSPECTRUM");
 
@@ -128,62 +132,140 @@ Electroluminescence::PostStepDoIt(const G4Track& track, const G4Step& step)
   G4PhysicsOrderedFreeVector* spectrum_integral =
     (G4PhysicsOrderedFreeVector*)(*theFastIntegralTable_)(mat->GetIndex());
 
-
   G4double sc_max = spectrum_integral->GetMaxValue();
+  
+  // Add time components to EL
+  G4int N_timeconstants = 1;
+ 
+   if(mpt->GetProperty("ELTIMECONSTANT3"))
+     N_timeconstants = 3;
+   else if(mpt->GetProperty("ELTIMECONSTANT2"))
+     N_timeconstants = 2;
+   else if(!(mpt->GetProperty("ELTIMECONSTANT1")))
+   {
+     // no components were specified
+     return G4VDiscreteProcess::PostStepDoIt(track, step);
+   }
+  G4double yield1     = 0.;
+  G4double yield2     = 0.;
+  G4double yield3     = 0.;
+  G4double sum_yields = 0.;  
+  
+  yield1 = mpt->ConstPropertyExists("ELYIELD1")
+                ? mpt->GetConstProperty("ELYIELD1")
+                : 1.;
+  yield2 = mpt->ConstPropertyExists("ELYIELD2")
+                ? mpt->GetConstProperty("ELYIELD2")
+                : 0.;
+  yield3 = mpt->ConstPropertyExists("ELYIELD3")
+                ? mpt->GetConstProperty("ELYIELD3")
+                : 0.;
 
-  for (G4int i=0; i<num_photons; i++) {
-    // Generate a random direction for the photon
-    // (EL is supposed isotropic)
-    G4double cos_theta = 1. - 2.*G4UniformRand();
-    G4double sin_theta = sqrt((1.-cos_theta)*(1.+cos_theta));
+  sum_yields = yield1 + yield2 + yield3;
 
-    G4double phi = twopi * G4UniformRand();
-    G4double sin_phi = sin(phi);
-    G4double cos_phi = cos(phi);
+  G4double scint_time                 = 0.;
+  G4double rise_time                  = 0.;
 
-    G4double px = sin_theta * cos_phi;
-    G4double py = sin_theta * sin_phi;
-    G4double pz = cos_theta;
+for(G4int scnt = 0; scnt < N_timeconstants; ++scnt)
+  {
+    // if there is 1 time constant it is #1, etc.
+    if(scnt == 0)
+    {
+      if(N_timeconstants == 1)
+      {
+        num_photons = total_num_photons;
+      }
+      else
+      {
+        num_photons = yield1 / sum_yields * total_num_photons;
+      }
+      scint_time = mpt->GetConstProperty("ELTIMECONSTANT1");
+    }
+    else if(scnt == 1)
+    {
+      // to be consistent with old version (due to double->int conversion)
+      if(N_timeconstants == 2)
+      {
+        num_photons = total_num_photons - num_photons;
+      }
+      else
+      {
+        num_photons = yield2 / sum_yields * total_num_photons;
+      }
+      scint_time = mpt->GetConstProperty("ELTIMECONSTANT2");
+    }
+    else if(scnt == 2)
+    {
+      num_photons   = yield3 / sum_yields * total_num_photons;
+      scint_time = mpt->GetConstProperty("ELTIMECONSTANT3");
+    }
 
-    G4ThreeVector momentum(px, py, pz);
+    for (G4int i=0; i<num_photons; i++) {
+      // Generate a random direction for the photon
+      // (EL is supposed isotropic)
+      G4double cos_theta = 1. - 2.*G4UniformRand();
+      G4double sin_theta = sqrt((1.-cos_theta)*(1.+cos_theta));
 
-    // Determine photon polarization accordingly
-    G4double sx = cos_theta * cos_phi;
-    G4double sy = cos_theta * sin_phi;
-    G4double sz = -sin_theta;
+      G4double phi = twopi * G4UniformRand();
+      G4double sin_phi = sin(phi);
+      G4double cos_phi = cos(phi);
 
-    G4ThreeVector polarization(sx, sy, sz);
-    G4ThreeVector perp = momentum.cross(polarization);
+      G4double px = sin_theta * cos_phi;
+      G4double py = sin_theta * sin_phi;
+      G4double pz = cos_theta;
 
-    phi = twopi * G4UniformRand();
-    sin_phi = sin(phi);
-    cos_phi = cos(phi);
+      G4ThreeVector momentum(px, py, pz);
 
-    polarization = cos_phi * polarization + sin_phi * perp;
-    polarization = polarization.unit();
+      // Determine photon polarization accordingly
+      G4double sx = cos_theta * cos_phi;
+      G4double sy = cos_theta * sin_phi;
+      G4double sz = -sin_theta;
 
-    // Generate a new photon and set properties
-    G4DynamicParticle* photon =
-      new G4DynamicParticle(G4OpticalPhoton::Definition(), momentum);
+      G4ThreeVector polarization(sx, sy, sz);
+      G4ThreeVector perp = momentum.cross(polarization);
 
-    photon->
-      SetPolarization(polarization.x(), polarization.y(), polarization.z());
+      phi = twopi * G4UniformRand();
+      sin_phi = sin(phi);
+      cos_phi = cos(phi);
 
-    // Determine photon energy
-    G4double sc_value = G4UniformRand()*sc_max;
-    G4double sampled_energy = spectrum_integral->GetEnergy(sc_value);
-    photon->SetKineticEnergy(sampled_energy);
+      polarization = cos_phi * polarization + sin_phi * perp;
+      polarization = polarization.unit();
 
-    G4LorentzVector xyzt =
-      field->GeneratePointAlongDriftLine(initial_position, final_position);
+      // Generate a new photon and set properties
+      G4DynamicParticle* photon =
+        new G4DynamicParticle(G4OpticalPhoton::Definition(), momentum);
 
-    // Create the track
-    G4Track* secondary = new G4Track(photon, xyzt.t(), xyzt.v());
-    secondary->SetParentID(track.GetTrackID());
-    ParticleChange_->AddSecondary(secondary);
+      photon->
+        SetPolarization(polarization.x(), polarization.y(), polarization.z());
+
+      // Determine photon energy
+      G4double sc_value = G4UniformRand()*sc_max;
+      G4double sampled_energy = spectrum_integral->GetEnergy(sc_value);
+      photon->SetKineticEnergy(sampled_energy);
+
+      G4LorentzVector xyzt =
+        field->GeneratePointAlongDriftLine(initial_position, final_position);
+
+      // Time decay 
+      G4double deltaTime = 0;
+      if(rise_time == 0.0)
+      {
+        deltaTime -= scint_time * std::log(G4UniformRand());
+      }
+      else
+      {
+        deltaTime += SampleTime(rise_time, scint_time);
+      }
+
+      xyzt.setT(xyzt.t() + deltaTime);      
+
+      // Create the track
+      G4Track* secondary = new G4Track(photon, xyzt.t(), xyzt.v());
+      secondary->SetParentID(track.GetTrackID());
+      ParticleChange_->AddSecondary(secondary);
 
   }
-
+  }
   return G4VDiscreteProcess::PostStepDoIt(track, step);
 }
 
@@ -247,6 +329,26 @@ void Electroluminescence::ComputeCumulativeDistribution(
   }
 }
 
+G4double Electroluminescence::SampleTime(G4double tau1, G4double tau2)
+ {
+   // tau1: rise time and tau2: decay time
+   // Loop checking, 07-Aug-2015, Vladimir Ivanchenko
+   while(true)
+   {
+     G4double ran1 = G4UniformRand();
+     G4double ran2 = G4UniformRand();
+ 
+     // exponential distribution as envelope function: very efficient
+     G4double d = (tau1 + tau2) / tau2;
+     // make sure the envelope function is
+     // always larger than the bi-exponential
+     G4double t  = -1.0 * tau2 * std::log(1. - ran1);
+     G4double gg = d * single_exp(t, tau2);
+     if(ran2 <= bi_exp(t, tau1, tau2) / gg)
+       return t;
+   }
+   return -1.0;
+ }
 
 
 G4double Electroluminescence::GetMeanFreePath(const G4Track&, G4double,

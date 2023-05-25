@@ -42,10 +42,14 @@ namespace nexus {
     /// but sets the 'StronglyForced' condition for the DoIt to be
     /// invoked at every step.
     G4double GetMeanFreePath(const G4Track&, G4double, G4ForceCondition*);
-
+    G4double SampleTime(G4double tau1, G4double tau2);
     void BuildThePhysicsTable();
     void ComputeCumulativeDistribution(const G4PhysicsOrderedFreeVector&,
                                        G4PhysicsOrderedFreeVector&);
+
+    G4double single_exp(G4double t, G4double tau2);
+    G4double bi_exp(G4double t, G4double tau1, G4double tau2);
+
 
   private:
     G4ParticleChange* ParticleChange_;
@@ -58,6 +62,18 @@ namespace nexus {
     G4int photons_per_point_;
   };
 
-} // end namespace nexus
+
+inline G4double Electroluminescence::single_exp(G4double t, G4double tau2)
+ {
+   return std::exp(-1.0 * t / tau2) / tau2;
+ }
+ 
+ inline G4double Electroluminescence::bi_exp(G4double t, G4double tau1,
+                                         G4double tau2)
+ {
+   return std::exp(-1.0 * t / tau2) * (1 - std::exp(-1.0 * t / tau1)) / tau2 /
+          tau2 * (tau1 + tau2);
+ }
+ } // end namespace nexus
 
 #endif
